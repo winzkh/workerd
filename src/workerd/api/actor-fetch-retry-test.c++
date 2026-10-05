@@ -1573,18 +1573,17 @@ class LostFirstResponseOutgoingFactory final: public Fetcher::OutgoingFactory {
   TestFixture& receiver;
 };
 
-// workerd does not transform decorator syntax, so the script calls the decorator the way a
-// bundler's standard-decorator output does.
 constexpr kj::StringPtr RETRYABLE_FETCH_ACTOR_SOURCE = R"SCRIPT(
   import { DurableObject } from "cloudflare:workers";
   import { retryable } from "cloudflare:durable-objects";
   class Actor extends DurableObject {
+    static {
+      retryable(this.prototype.fetch);
+    }
     async fetch() {
       return new Response("OK");
     }
   }
-  retryable(Actor.prototype.fetch, { kind: "method", name: "fetch", static: false, private: false,
-      addInitializer() {} });
   export default Actor;
 )SCRIPT"_kj;
 
@@ -1647,7 +1646,7 @@ kj::Maybe<kj::Exception> runFetchWithLostFirstResponse(
   return failure;
 }
 
-KJ_TEST("a @retryable actor fetch whose response was lost recovers on retry") {
+KJ_TEST("a retryable() actor fetch whose response was lost recovers on retry") {
   ReplayState state;
   uint claimCount = 0;
 
@@ -1660,7 +1659,7 @@ KJ_TEST("a @retryable actor fetch whose response was lost recovers on retry") {
   KJ_EXPECT(state.outcomes[0] == ActorRetryOutcome::RECOVERED);
 }
 
-KJ_TEST("an actor fetch whose response was lost is rejected on retry without @retryable") {
+KJ_TEST("an actor fetch whose response was lost is rejected on retry without retryable()") {
   ReplayState state;
   uint claimCount = 0;
 
