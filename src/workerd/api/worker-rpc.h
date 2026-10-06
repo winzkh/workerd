@@ -407,6 +407,7 @@ class JsRpcPromise: public JsRpcClientProvider {
   ~JsRpcPromise() noexcept(false);
 
   void resolve(jsg::Lock& js, jsg::JsValue result);
+  void reject(jsg::Lock& js, jsg::JsValue error);
   void setOriginatingCall(kj::Maybe<TraceContextParent> value);
   void dispose(jsg::Lock& js);
 
@@ -475,12 +476,14 @@ class JsRpcPromise: public JsRpcClientProvider {
     //   be held from KJ I/O objects, but this is a JSG object).
     IoPtr<JsRpcPromise> ctxCheck;
   };
+  // A rejected call must drop its pipeline: holding it would keep the call's answer, and so the
+  // callee's session, open. Pipelining on a rejected promise rethrows `error` instead.
+  struct Rejected {
+    jsg::Value error;
+  };
   struct Disposed {};
 
-  // Note we don't have a "rejected" state because it works fine to just leave the state as
-  // "Pending" -- calls to `pipeline` will rethrow the same exception, and holding the pipeline
-  // open won't actually hold anything open on the server.
-  kj::OneOf<Pending, Resolved, Disposed> state;
+  kj::OneOf<Pending, Resolved, Rejected, Disposed> state;
 
   void visitForGc(jsg::GcVisitor& visitor) {
     visitor.visit(inner);
@@ -488,6 +491,9 @@ class JsRpcPromise: public JsRpcClientProvider {
       KJ_CASE_ONEOF(pending, Pending) {}
       KJ_CASE_ONEOF(resolved, Resolved) {
         visitor.visit(resolved.result);
+      }
+      KJ_CASE_ONEOF(rejected, Rejected) {
+        visitor.visit(rejected.error);
       }
       KJ_CASE_ONEOF(disposed, Disposed) {}
     }
