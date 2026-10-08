@@ -1,0 +1,95 @@
+name: build-workerd-39bit
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: workerd tag to build
+        required: true
+        default: v1.20261001.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-workerd-39bit
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout workerd
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/workerd
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Install LLVM 19 toolchain
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          wget -q https://apt.llvm.org/llvm.sh
+          sed -i '/apt-get install/d' llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          sudo apt-get install -y -qq --no-install-recommends \
+            clang-19 lld-19 libunwind-19 libc++abi1-19 libc++1-19 \
+            libc++-19-dev libclang-rt-19-dev llvm-19
+          {
+            echo "build:linux --repo_env=CC=/usr/lib/llvm-19/bin/clang"
+            echo "build:linux --linkopt=--ld-path=/usr/lib/llvm-19/bin/ld.lld"
+            echo "build:linux --host_linkopt=--ld-path=/usr/lib/llvm-19/bin/ld.lld"
+            echo "build:linux --repo_env=AR=/usr/lib/llvm-19/bin/llvm-ar"
+          } >> .bazelrc
+
+      - name: Install bazelisk
+        run: |
+          curl -fsSL -o /tmp/bazelisk \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-arm64
+          sudo install -m 755 /tmp/bazelisk /usr/local/bin/bazelisk
+          sudo ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build workerd (tcmalloc disabled for 39-bit VA)
+        run: |
+          pnpm install --no-frozen-lockfile
+          bazel build \
+            --config=release_linux \
+            --//src/workerd/server:use_tcmalloc=False \
+            --strip=always \
+            --jobs=4 \
+            //src/workerd/server:workerd
+
+      - name: Verify binary
+        run: |
+          ./bazel-bin/src/workerd/server/workerd --version
+          file ./bazel-bin/src/workerd/server/workerd
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: workerd-linux-arm64-39bit
+          path: bazel-bin/src/workerd/server/workerd
+          if-no-files-found: error
